@@ -1,4 +1,5 @@
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -6,12 +7,18 @@ var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("Search")
     ?? throw new InvalidOperationException("ConnectionStrings:Search가 설정되지 않았습니다.");
 
+builder.Services.AddDbContext<SearchDbContext>(o => o.UseSqlServer(connectionString));
+
 var app = builder.Build();
+
+app.MapDataAccessEndpoints(connectionString);
 
 app.MapGet("/api/search", async (string? q, int page = 1, int size = 10) =>
 {
-    if (string.IsNullOrWhiteSpace(q))
-        return Results.BadRequest("q 누락/빈 문자열");
+    if (q == null)
+        return Results.BadRequest("q 누락");
+    else if (string.IsNullOrWhiteSpace(q))
+        return Results.UnprocessableEntity("q는 빈 문자열일 수 없습니다.");
     else if (page < 1)
         return Results.UnprocessableEntity("page는 1미만일 수 없습니다.");
     else if (size < 1 || size > 50)
@@ -31,11 +38,11 @@ app.MapGet("/api/search", async (string? q, int page = 1, int size = 10) =>
     await using var cmd = conn.CreateCommand();
     cmd.CommandText = """
         SELECT id, title, body, created_at
-    FROM dbo.documents
-    WHERE title LIKE N'%' + @q + N'%' OR body LIKE N'%' + @q + N'%'
-    ORDER BY id DESC
-    OFFSET @offset ROWS FETCH NEXT @size ROWS ONLY;
-    """;
+        FROM dbo.documents
+        WHERE title LIKE N'%' + @q + N'%' OR body LIKE N'%' + @q + N'%'
+        ORDER BY id DESC
+        OFFSET @offset ROWS FETCH NEXT @size ROWS ONLY;
+        """;
     cmd.Parameters.AddWithValue("@q", q);
     cmd.Parameters.AddWithValue("@offset", (long)(page - 1) * size);
     cmd.Parameters.AddWithValue("@size", size);
