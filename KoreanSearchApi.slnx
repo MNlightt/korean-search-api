@@ -2,4 +2,8 @@
   <Folder Name="/src/">
     <Project Path="src/SearchApi/SearchApi.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Indexer/Indexer.csproj" />
+  </Folder>
+  <Project Path="tools/Loader/Loader.csproj" Id="71000aeb-4fb2-4a24-949b-2f7a7e94a423" />
 </Solution>

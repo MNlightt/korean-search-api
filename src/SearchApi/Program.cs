@@ -1,5 +1,6 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using OpenSearch.Client;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,11 +10,15 @@ var connectionString = builder.Configuration.GetConnectionString("Search")
 
 builder.Services.AddDbContext<SearchDbContext>(o => o.UseSqlServer(connectionString));
 
+var osUrl = builder.Configuration["OpenSearch:Url"] ?? "http://localhost:9200";
+builder.Services.AddSingleton(new OpenSearchClient(
+    new ConnectionSettings(new Uri(osUrl)).DefaultIndex("documents")));
+
 var app = builder.Build();
 
 app.MapDataAccessEndpoints(connectionString);
 
-app.MapGet("/api/search", async (string? q, int page = 1, int size = 10) =>
+app.MapGet("/api/search", async (OpenSearchClient client, string? q, int page = 1, int size = 10) =>
 {
     if (q == null)
         return Results.BadRequest("q 누락");
@@ -26,31 +31,19 @@ app.MapGet("/api/search", async (string? q, int page = 1, int size = 10) =>
 
     var documentResult = new List<DocumentDto>();
 
-    await using var conn = new SqlConnection(connectionString);
-    try
-    {
-        await conn.OpenAsync();
-    }
-    catch (SqlException)
-    {
-        return Results.StatusCode(503);
-    }
-    await using var cmd = conn.CreateCommand();
-    cmd.CommandText = """
-        SELECT id, title, body, created_at
-        FROM dbo.documents
-        WHERE title LIKE N'%' + @q + N'%' OR body LIKE N'%' + @q + N'%'
-        ORDER BY id DESC
-        OFFSET @offset ROWS FETCH NEXT @size ROWS ONLY;
-        """;
-    cmd.Parameters.AddWithValue("@q", q);
-    cmd.Parameters.AddWithValue("@offset", (long)(page - 1) * size);
-    cmd.Parameters.AddWithValue("@size", size);
+    var res = await client.SearchAsync<DocSource>(s => s
+    .From((page - 1) * size)
+    .Size(size)
+    .Query(x => x.Match(m => m.Field("body").Query(q))));
 
-    await using var reader = await cmd.ExecuteReaderAsync();
-    while (await reader.ReadAsync())
+    if (!res.IsValid)
+        return res.ApiCall.HttpStatusCode is null
+            ? Results.StatusCode(503)   // 연결 자체 실패
+            : Results.StatusCode(502);  // OpenSearch가 오류 응답
+
+    foreach (var hit in res.Hits)
     {
-        documentResult.Add(new DocumentDto(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetDateTime(3)));
+        documentResult.Add(new DocumentDto(int.Parse(hit.Id), hit.Source.title, hit.Source.body, hit.Source.created_at));
     }
 
 
@@ -60,3 +53,4 @@ app.MapGet("/api/search", async (string? q, int page = 1, int size = 10) =>
 app.Run();
 
 record DocumentDto(int Id, string Title, string Body, DateTime CreatedAt);
+class DocSource { public string title { get; set; } = ""; public string body { get; set; } = ""; public DateTime created_at { get; set; } }
