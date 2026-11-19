@@ -1,11 +1,8 @@
 ﻿using Dapper;
 using Microsoft.Data.SqlClient;
-using Microsoft.IdentityModel.Tokens;
 using OpenSearch.Client;
-using OpenSearch.Net;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Text.Json;
 
 var connStr = Environment.GetEnvironmentVariable("SEARCH_CONN")
     ?? throw new InvalidOperationException("SEARCH_CONN 환경 변수가 없습니다.");
@@ -22,24 +19,23 @@ await db.OpenAsync();
 
 var dbDocumentIds = await db.QueryAsync<int>("SELECT id FROM dbo.documents;");
 
-var vectors = MemoryMarshal.Cast<byte, float>(File.ReadAllBytes("C:\\Users\\mjs\\Documents\\korean-search-api\\data\\embeddings\\vectors.bin")).ToArray();
-var ids = MemoryMarshal.Cast<byte, long>(File.ReadAllBytes("C:\\Users\\mjs\\Documents\\korean-search-api\\data\\embeddings\\ids.bin")).ToArray();
+var vectors = MemoryMarshal.Cast<byte, float>(File.ReadAllBytes("data/embeddings/vectors.bin")).ToArray();
+var ids = MemoryMarshal.Cast<byte, long>(File.ReadAllBytes("data/embeddings/ids.bin")).ToArray();
 
 if (vectors.Length % 1024 != 0 || vectors.Length / 1024 != ids.Length)
 {
-    Console.WriteLine($"vectors Length:{vectors.Length}");
-    Console.WriteLine($"ids Length:{ids.Length}");
+    Console.WriteLine($"vectors Length:{vectors.Length / 1024}, ids Length: {ids.Length}");
     throw new InvalidDataException("벡터 수와 id 수가 다릅니다.");
 }
 
 if (ids.Length != dbDocumentIds.Count())
     throw new InvalidDataException("id 수와 db 문서 수가 다릅니다.");
 
-var idVectorPairs = new Dictionary<int, int>();
+var idRowPairs = new Dictionary<int, int>();
 
-foreach (var d in dbDocumentIds)
+for (int row = 0; row < ids.Length; row++)
 {
-    idVectorPairs.Add(d, ids.IndexOf(d));
+    idRowPairs.Add((int)ids[row], row);
 }
 
 var sw = Stopwatch.StartNew();
@@ -63,8 +59,19 @@ while (true)
     var bulkResponse = await client.BulkAsync(b =>
     {
         foreach (var d in batch)
-            b.Index<object>(op => op.Index("documents_vec").Id(d.Id)
-                .Document(new { title = d.Title, body = d.Body, created_at = d.CreatedAt, embedding = vectors.AsSpan(idVectorPairs[d.Id] * 1024, 1024).ToArray() }));
+        {
+            if (idRowPairs.TryGetValue(d.Id, out int row))
+            {
+                b.Index<object>(op => op.Index("documents_vec").Id(d.Id)
+                .Document(new { title = d.Title, body = d.Body, created_at = d.CreatedAt, embedding = vectors.AsSpan(row * 1024, 1024).ToArray() }));
+            }
+            else
+            {
+                Console.WriteLine($"ID {d.Id}에 해당하는 vector가 없습니다.");
+            }
+            
+        }
+            
 
         return b;
     });
