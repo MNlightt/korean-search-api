@@ -3,6 +3,7 @@ from fastapi import FastAPI
 import torch
 import numpy as np
 import logging
+import time
 
 app = FastAPI()
 
@@ -17,7 +18,9 @@ model = SentenceTransformer(model_name, device="cuda" if torch.cuda.is_available
 model.max_seq_length = max_seq_length
 
 @app.get("/embed")
-async def embed_query(q: str):
-    logger.info(f"received query: {q}")
+def embed_query(q: str):
+    start = time.perf_counter()
     vector = model.encode([q], convert_to_numpy=True).astype(np.float32)[0]
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    logger.info("embed len=%d elapsed_ms=%.1f", len(q), elapsed_ms)
     return {"embed":vector.tolist()}
