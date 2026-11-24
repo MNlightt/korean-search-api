@@ -2,7 +2,7 @@
 
 출력: vectors.npy (float32, [문서 수, 1024]), ids.npy (int64, 같은 순서의 documents.id)
 사용: SEARCH_CONN 설정한 터미널에서
-    python tools/embed/embed_all.py --max-seq 8192 --batch 8
+    python tools/embed/embed_all.py --max-seq 4096 --batch 8
 """
 import argparse
 import os
