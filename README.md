@@ -31,14 +31,14 @@ ASP.NET Core(.NET 10)와 MSSQL로 만드는 한국어 검색 API입니다. BM25(
 
    ```bash
    dotnet run --project tools/Loader                          # Wikipedia 1만 건 → MSSQL dbo.documents
-   python tools/embed/embed_all.py --max-seq 4096 --batch 8   # MSSQL → data/embeddings/vectors.npy, ids.npy
-   python -c "import numpy as np; np.load('data/embeddings/vectors.npy').tofile('data/embeddings/vectors.bin'); np.load('data/embeddings/ids.npy').tofile('data/embeddings/ids.bin')"
-   dotnet run --project tools/Indexer                         # MSSQL + data/embeddings/*.bin → OpenSearch documents_vec
+   dotnet run --project tools/Indexer -- documents            # MSSQL → OpenSearch documents (BM25)
+   python tools/embed/embed_all.py --max-seq 4096 --batch 8   # MSSQL → data/embeddings/ (.npy, .bin)
+   dotnet run --project tools/Indexer -- documents_vec        # MSSQL + data/embeddings/*.bin → OpenSearch documents_vec
    ```
 
    - `embed_all.py`에는 `torch`, `sentence-transformers`, `numpy`, `pyodbc`가 필요합니다. GPU가 있으면 CUDA로 실행합니다.
-   - Indexer는 헤더 없는 `.bin`(float32 [문서 수 × 1024], int64 id)을 읽으므로 세 번째 줄로 `.npy`를 변환합니다.
-   - 현재 Indexer는 `documents_vec`만 색인합니다. BM25용 `documents` 인덱스는 커밋 `ff8cb77`의 Indexer로 만듭니다.
+   - Indexer는 헤더 없는 `.bin`(float32 [문서 수 × 1024], int64 id)을 읽습니다. `embed_all.py`가 `.npy`와 함께 저장합니다.
+   - Indexer 인자는 `documents`(배치 2500) 또는 `documents_vec`(배치 1000)만 받습니다. 그 밖의 값이면 사용법을 출력하고 끝납니다.
 
 6. 질의 임베딩 서버를 실행합니다(포트 8001). API는 설정 `Embed:Url`(기본값 `http://127.0.0.1:8001`)로 이 서버를 호출합니다.
 
@@ -58,7 +58,7 @@ ASP.NET Core(.NET 10)와 MSSQL로 만드는 한국어 검색 API입니다. BM25(
 - Wikipedia 한국어: Hugging Face `wikimedia/wikipedia` 데이터셋 `20231101.ko` 앞 1만 건. 라이선스 CC BY-SA.
 - 저장소에 포함하지 않는 것(`data/`, `.gitignore`):
   - Loader가 내려받은 위키 원본 캐시
-  - 임베딩 파일 `data/embeddings/` (`vectors.npy` 약 41MB, `ids.npy`, 변환한 `.bin`)
+  - 임베딩 파일 `data/embeddings/` (`vectors.npy`·`vectors.bin` 각 약 41MB, `ids.npy`·`ids.bin`)
 - 둘 다 위 5단계로 다시 만들 수 있습니다.
 
 ## 임베딩 모델
@@ -78,7 +78,7 @@ MSSQL(원본) → 색인기(콘솔) → OpenSearch(Nori 분석기, k-NN) ← 검
 
 ```mermaid
 flowchart LR
-    A[(MSSQL<br/>dbo.documents)] -->|keyset 읽기<br/>WHERE id > @last| B[색인기<br/>tools/Indexer]
+    A[(MSSQL<br/>dbo.documents)] -->|keyset 읽기<br/>WHERE id > @last| B[색인기<br/>tools/Indexer -- documents]
     B -->|Bulk index<br/>배치 2500건, _id = id| C[(OpenSearch<br/>documents)]
     C -->|항목별 결과| D{실패 0건?}
     D -- 아니오 --> E[실패 id 출력 후 중단]
@@ -95,8 +95,8 @@ flowchart LR
 ```mermaid
 flowchart LR
     A[(MSSQL<br/>dbo.documents)] --> B[embed_all.py<br/>KURE-v1, GPU]
-    B --> C[data/embeddings<br/>vectors.npy, ids.npy]
-    C -->|.bin 변환| D[색인기<br/>tools/Indexer]
+    B --> C[data/embeddings<br/>vectors.bin, ids.bin]
+    C --> D[색인기<br/>tools/Indexer -- documents_vec]
     A -->|keyset 읽기| D
     D -->|Bulk index<br/>배치 1000건, id로 벡터 매칭| E[(OpenSearch<br/>documents_vec<br/>knn_vector 1024, HNSW faiss)]
     E -->|refresh 후| F[건수 검증<br/>_count == COUNT]

@@ -4,10 +4,18 @@ using OpenSearch.Client;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
+if (args.Length != 1 || args[0] is not ("documents" or "documents_vec"))
+{
+    Console.WriteLine("사용법: dotnet run --project tools/Indexer -- documents|documents_vec");
+    return;
+}
+var indexName = args[0];
+var isVec = indexName == "documents_vec";
+
 var connStr = Environment.GetEnvironmentVariable("SEARCH_CONN")
     ?? throw new InvalidOperationException("SEARCH_CONN 환경 변수가 없습니다.");
 
-var batchSize = 1000;
+var batchSize = isVec ? 1000 : 2500;
 var last = 0;
 
 var settings = new ConnectionSettings(new Uri("http://localhost:9200")).DisableDirectStreaming();
@@ -19,25 +27,28 @@ await db.OpenAsync();
 
 var dbDocumentIds = await db.QueryAsync<int>("SELECT id FROM dbo.documents;");
 
-var vectors = MemoryMarshal.Cast<byte, float>(File.ReadAllBytes("data/embeddings/vectors.bin")).ToArray();
-var ids = MemoryMarshal.Cast<byte, long>(File.ReadAllBytes("data/embeddings/ids.bin")).ToArray();
-
-if (vectors.Length % 1024 != 0 || vectors.Length / 1024 != ids.Length)
-{
-    Console.WriteLine($"vectors Length:{vectors.Length / 1024}, ids Length: {ids.Length}");
-    throw new InvalidDataException("벡터 수와 id 수가 다릅니다.");
-}
-
-if (ids.Length != dbDocumentIds.Count())
-    throw new InvalidDataException("id 수와 db 문서 수가 다릅니다.");
-
 var idRowPairs = new Dictionary<int, int>();
-
-for (int row = 0; row < ids.Length; row++)
+float[]? vectors = null;
+long[]? ids = null;
+if (isVec)
 {
-    idRowPairs.Add((int)ids[row], row);
-}
+    vectors = MemoryMarshal.Cast<byte, float>(File.ReadAllBytes("data/embeddings/vectors.bin")).ToArray();
+    ids = MemoryMarshal.Cast<byte, long>(File.ReadAllBytes("data/embeddings/ids.bin")).ToArray();
 
+    if (vectors.Length % 1024 != 0 || vectors.Length / 1024 != ids.Length)
+    {
+        Console.WriteLine($"vectors Length:{vectors.Length / 1024}, ids Length: {ids.Length}");
+        throw new InvalidDataException("벡터 수와 id 수가 다릅니다.");
+    }
+
+    if (ids.Length != dbDocumentIds.Count())
+        throw new InvalidDataException("id 수와 db 문서 수가 다릅니다.");
+
+    for (int row = 0; row < ids.Length; row++)
+    {
+        idRowPairs.Add((int)ids[row], row);
+    }
+}
 var sw = Stopwatch.StartNew();
 
 var isFirst = true;
@@ -49,8 +60,8 @@ while (true)
 
     if (batch.Count == 0)
     {
-        await client.Indices.RefreshAsync("documents_vec");
-        var os = await client.CountAsync<object>(c => c.Index("documents_vec"));
+        await client.Indices.RefreshAsync(indexName);
+        var os = await client.CountAsync<object>(c => c.Index(indexName));
         var ms = await db.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM dbo.documents");
         Console.WriteLine($"OpenSearch {os.Count} / MSSQL {ms}");
         break;
@@ -60,18 +71,22 @@ while (true)
     {
         foreach (var d in batch)
         {
-            if (idRowPairs.TryGetValue(d.Id, out int row))
-            {
-                b.Index<object>(op => op.Index("documents_vec").Id(d.Id)
-                .Document(new { title = d.Title, body = d.Body, created_at = d.CreatedAt, embedding = vectors.AsSpan(row * 1024, 1024).ToArray() }));
-            }
+            if (!isVec)
+                b.Index<object>(op => op.Index(indexName).Id(d.Id)
+                    .Document(new { title = d.Title, body = d.Body, created_at = d.CreatedAt }));
+            else if (idRowPairs.TryGetValue(d.Id, out int row))
+                b.Index<object>(op => op.Index(indexName).Id(d.Id)
+                    .Document(new
+                    {
+                        title = d.Title,
+                        body = d.Body,
+                        created_at = d.CreatedAt,
+                        embedding = vectors!.AsSpan(row * 1024, 1024).ToArray()
+                    }));
             else
-            {
                 Console.WriteLine($"ID {d.Id}에 해당하는 vector가 없습니다.");
-            }
-            
         }
-            
+
 
         return b;
     });

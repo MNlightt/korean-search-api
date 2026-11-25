@@ -1,6 +1,7 @@
 """5주차 §3: dbo.documents 전체를 임베딩해 data/embeddings/ 에 저장한다.
 
 출력: vectors.npy (float32, [문서 수, 1024]), ids.npy (int64, 같은 순서의 documents.id)
+    vectors.bin, ids.bin (.bin 파일은 헤더 없는 원시 배열)
 사용: SEARCH_CONN 설정한 터미널에서
     python tools/embed/embed_all.py --max-seq 4096 --batch 8
 """
@@ -50,6 +51,8 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     np.save(OUT / "vectors.npy", vectors)
     np.save(OUT / "ids.npy", ids)
+    vectors.tofile(OUT / "vectors.bin")
+    ids.tofile(OUT / "ids.bin")
 
     print(f"벡터 {vectors.shape}, {elapsed:.0f}초, 장치 {model.device}, batch {args.batch}, max_seq {args.max_seq}")
     print(f"노름 최소 {norms.min():.4f} 최대 {norms.max():.4f}, 영벡터 {zero}건")
